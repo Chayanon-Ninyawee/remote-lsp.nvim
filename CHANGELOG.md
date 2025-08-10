@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/Chayanon-Ninyawee/remote-lsp.nvim/compare/v1.0.0...v1.0.1) (2025-08-10)
+
+
+### Refactor
+
+* Clean up lsp-proxy.py ([73dfb37](https://github.com/Chayanon-Ninyawee/remote-lsp.nvim/commit/73dfb376f57e5295c4b689ef1acc046cc9f46137))
+
 ## 1.0.0 (2025-08-10)
 
 
