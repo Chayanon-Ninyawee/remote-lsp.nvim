@@ -34,7 +34,100 @@ shutdown_requested = False
 ssh_process = None  # Global reference to SSH process
 
 
-def replace_paths(obj, user_remote, sshfs_prefix, remote_prefix):
+def parse_args(argv):
+    if len(argv) < 5:
+        logger.error(
+            "[lsp-proxy.py Error]: Usage: lsp-proxy.py <user@remote> <sshfs_prefix> <remote_prefix> [--root-dir <dir>] <lsp_command> [args...]"
+        )
+        sys.exit(1)
+
+    user_remote = argv[1]
+    sshfs_prefix = argv[2]
+    remote_prefix = argv[3]
+
+    root_dir = None
+    lsp_command_start = 4
+    if len(argv) > 5 and argv[4] == "--root-dir":
+        root_dir = argv[5]
+        lsp_command_start = 6
+        logger.info(f"Root directory specified: {root_dir}")
+
+    lsp_command = argv[lsp_command_start:]
+
+    return user_remote, sshfs_prefix, remote_prefix, root_dir, lsp_command
+
+
+def build_ssh_command(user_remote, root_dir, lsp_command):
+    import shlex
+
+    try:
+        cd_command = f"cd {shlex.quote(root_dir)} && " if root_dir else ""
+    except Exception as e:
+        logger.error(f"[lsp-proxy.py Error]: Error creating cd_command: {e}")
+        sys.exit(1)
+
+    env_setup = (
+        "source ~/.bashrc 2>/dev/null || true; "
+        "source ~/.profile 2>/dev/null || true; "
+        "source ~/.zshrc 2>/dev/null || true; "
+        "export PATH=$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:$PATH; "
+        "export CARGO_HOME=$HOME/.cargo 2>/dev/null || true; "
+        "export RUSTUP_HOME=$HOME/.rustup 2>/dev/null || true; "
+    )
+
+    lsp_command_str = " ".join(lsp_command)
+    full_command = f"{env_setup} {cd_command}{lsp_command_str}"
+
+    ssh_cmd = [
+        "ssh",
+        "-q",
+        "-o",
+        "ServerAliveInterval=10",
+        "-o",
+        "ServerAliveCountMax=6",
+        "-o",
+        "TCPKeepAlive=yes",
+        "-o",
+        "ControlMaster=no",
+        "-o",
+        "ControlPath=none",
+        user_remote,
+        full_command,
+    ]
+
+    logger.info(f"Using environment setup for LSP server: {cd_command}{lsp_command_str}")
+    logger.info(f"Executing: {' '.join(ssh_cmd)}")
+
+    return ssh_cmd
+
+
+def start_stderr_monitoring(ssh_process):
+    def monitor_stderr():
+        while not shutdown_requested:
+            try:
+                line = ssh_process.stderr.readline()
+                if not line:
+                    break
+                error_msg = line.decode("utf-8", errors="replace").strip()
+                if error_msg:
+                    logger.error(error_msg)
+                import time
+
+                # Throttle logging to prevent combining lines
+                time.sleep(0.010)
+            except Exception:
+                break
+
+    try:
+        stderr_thread = threading.Thread(target=monitor_stderr)
+        stderr_thread.daemon = True
+        stderr_thread.start()
+    except Exception as e:
+        logger.error(f"[lsp-proxy.py Error]: Failed to start stderr monitoring thread: {e}")
+        sys.exit(1)
+
+
+def replace_paths(obj, sshfs_prefix, remote_prefix):
     if isinstance(obj, str):
         result = obj
 
@@ -59,133 +152,134 @@ def replace_paths(obj, user_remote, sshfs_prefix, remote_prefix):
         return result
     elif isinstance(obj, dict):
         return {
-            replace_paths(k, user_remote, sshfs_prefix, remote_prefix): replace_paths(
-                v, user_remote, sshfs_prefix, remote_prefix
-            )
+            replace_paths(k, sshfs_prefix, remote_prefix): replace_paths(v, sshfs_prefix, remote_prefix)
             for k, v in obj.items()
         }
     elif isinstance(obj, list):
-        return [replace_paths(item, user_remote, sshfs_prefix, remote_prefix) for item in obj]
+        return [replace_paths(item, sshfs_prefix, remote_prefix) for item in obj]
 
     return obj
 
 
-def handle_stream(stream_name, input_stream, output_stream, user_remote, sshfs_prefix, remote_prefix):
+def handle_stream(stream_name, input_stream, output_stream, sshfs_prefix, remote_prefix):
     global shutdown_requested, ssh_process
 
     logger.info(f"Starting {stream_name} handler")
 
     while not shutdown_requested:
-        try:
-            # Read Content-Length header with proper EOF handling
-            header = b""
-            while not shutdown_requested:
-                try:
-                    byte = input_stream.read(1)
-                    if not byte:
-                        # Check if this is a real EOF or just no data available
-                        # For stdin/stdout pipes, empty read usually means EOF
-                        # But we should verify the process is still alive
-                        if hasattr(input_stream, "closed") and input_stream.closed:
-                            logger.info(f"{stream_name} - Input stream is closed")
-                            return
-                        # For process pipes, check if the process is still running
-                        if stream_name == "ssh_to_neovim" and ssh_process is not None:
-                            if ssh_process.poll() is not None:
-                                logger.info(
-                                    f"{stream_name} - SSH process has terminated (exit code: {ssh_process.returncode})"
-                                )
-                                return
+        # Read Content-Length header with proper EOF handling
+        header = b""
+        while not shutdown_requested:
+            try:
+                byte = input_stream.read(1)
+            except Exception as e:
+                logger.error(f"[lsp-proxy.py Error]: {stream_name} - Error reading header byte: {e}")
+                return
 
-                        # If we can't determine the state, treat as potential temporary condition
-                        # Try a small delay and check again
-                        import time
+            if byte:
+                header += byte
+                if header.endswith(b"\r\n\r\n"):
+                    break
 
-                        time.sleep(0.01)  # 10ms delay
-                        continue
-
-                    header += byte
-                    if header.endswith(b"\r\n\r\n"):
-                        break
-                except Exception as e:
-                    logger.error(f"{stream_name} - Error reading header byte: {e}")
+            # Check if this is a real EOF or just no data available
+            # For stdin/stdout pipes, empty read usually means EOF
+            # But we should verify the process is still alive
+            if hasattr(input_stream, "closed") and input_stream.closed:
+                logger.info(f"{stream_name} - Input stream is closed")
+                return
+            # For process pipes, check if the process is still running
+            if stream_name == "ssh_to_neovim" and ssh_process is not None:
+                if ssh_process.poll() is not None:
+                    logger.info(f"{stream_name} - SSH process has terminated (exit code: {ssh_process.returncode})")
                     return
 
-            # Parse Content-Length
-            content_length = None
-            for line in header.split(b"\r\n"):
-                if line.startswith(b"Content-Length:"):
-                    try:
-                        content_length = int(line.split(b":")[1].strip())
-                        break
-                    except (ValueError, IndexError) as e:
-                        logger.error(f"{stream_name} - Failed to parse Content-Length: {e}")
+            # If we can't determine the state, treat as potential temporary condition
+            # Try a small delay and check again
+            import time
 
-            if content_length is None:
-                continue
+            time.sleep(0.01)  # 10ms delay
 
-            # Read content with proper error handling
-            content = b""
-            while len(content) < content_length and not shutdown_requested:
+        # Parse Content-Length
+        content_length = None
+        for line in header.split(b"\r\n"):
+            if line.startswith(b"Content-Length:"):
                 try:
-                    remaining = content_length - len(content)
-                    chunk = input_stream.read(remaining)
-                    if not chunk:
-                        # Similar EOF checking as above
-                        if hasattr(input_stream, "closed") and input_stream.closed:
-                            logger.info(f"{stream_name} - Input stream closed during content read")
-                            return
-                        if stream_name == "ssh_to_neovim" and ssh_process is not None:
-                            if ssh_process.poll() is not None:
-                                logger.info(
-                                    f"{stream_name} - SSH process terminated during content read (exit code: {ssh_process.returncode})"
-                                )
-                                return
+                    content_length = int(line.split(b":")[1].strip())
+                    break
+                except (ValueError, IndexError) as e:
+                    logger.error(f"[lsp-proxy.py Error]: {stream_name} - Failed to parse Content-Length: {e}")
 
-                        # Brief delay for potential temporary condition
-                        import time
+        if content_length is None:
+            continue
 
-                        time.sleep(0.01)
-                        continue
-
-                    content += chunk
-                except Exception as e:
-                    logger.error(f"{stream_name} - Error reading content: {e}")
-                    return
+        # Read content with proper error handling
+        content = b""
+        while len(content) < content_length and not shutdown_requested:
+            remaining = content_length - len(content)
 
             try:
-                # Decode and parse JSON
-                content_str = content.decode("utf-8")
-                message = json.loads(content_str)
-
-                logger.debug(f"{stream_name} - Original message: {json.dumps(message, indent=2)}")
-
-                # Check for exit messages
-                if message.get("method") == "exit":
-                    logger.info("Exit message detected")
-                    shutdown_requested = True
-
-                # Replace URIs
-                translated_message = replace_paths(message, user_remote, sshfs_prefix, remote_prefix)
-
-                logger.debug(f"{stream_name} - Translated message: {json.dumps(translated_message, indent=2)}")
-
-                # Send translated message
-                new_content = json.dumps(translated_message)
-                header = f"Content-Length: {len(new_content)}\r\n\r\n"
-
-                output_stream.write(header.encode("utf-8"))
-                output_stream.write(new_content.encode("utf-8"))
-                output_stream.flush()
-
-            except json.JSONDecodeError as e:
-                logger.error(f"{stream_name} - JSON decode error: {e}")
+                chunk = input_stream.read(remaining)
             except Exception as e:
-                logger.error(f"{stream_name} - Error processing message: {e}")
+                logger.error(f"[lsp-proxy.py Error]: {stream_name} - Error reading content chunk: {e}")
+                return
 
+            if chunk:
+                content += chunk
+                continue
+
+            # Similar EOF checking as above
+            if hasattr(input_stream, "closed") and input_stream.closed:
+                logger.info(f"{stream_name} - Input stream closed during content read")
+                return
+            if stream_name == "ssh_to_neovim" and ssh_process is not None:
+                if ssh_process.poll() is not None:
+                    logger.info(
+                        f"{stream_name} - SSH process terminated during content read (exit code: {ssh_process.returncode})"
+                    )
+                    return
+
+            # Brief delay for potential temporary condition
+            import time
+
+            time.sleep(0.01)
+
+        try:
+            content_str = content.decode("utf-8")
+            message = json.loads(content_str)
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            logger.error(f"[lsp-proxy.py Error]: {stream_name} - JSON decode error: {e}")
+            continue
         except Exception as e:
-            logger.error(f"{stream_name} - Error in stream handler: {e}")
-            return
+            logger.error(f"[lsp-proxy.py Error]: {stream_name} - Error processing message: {e}")
+            continue
+
+        logger.debug(f"{stream_name} - Original message: {json.dumps(message, indent=2)}")
+
+        # Check for exit messages
+        if message.get("method") == "exit":
+            logger.info("Exit message detected")
+            shutdown_requested = True
+
+        # Replace URIs
+        try:
+            translated_message = replace_paths(message, sshfs_prefix, remote_prefix)
+        except Exception as e:
+            logger.error(f"[lsp-proxy.py Error]: {stream_name} - Error in replace_paths: {e}")
+            continue
+
+        logger.debug(f"{stream_name} - Translated message: {json.dumps(translated_message, indent=2)}")
+
+        # Send translated message
+        new_content = json.dumps(translated_message)
+        header = f"Content-Length: {len(new_content)}\r\n\r\n"
+
+        try:
+            output_stream.write(header.encode("utf-8"))
+            output_stream.write(new_content.encode("utf-8"))
+            output_stream.flush()
+        except Exception as e:
+            logger.error(f"[lsp-proxy.py Error]: {stream_name} - Error writing to output stream: {e}")
+            continue
 
     logger.info(f"{stream_name} - Handler exiting")
 
@@ -193,68 +287,11 @@ def handle_stream(stream_name, input_stream, output_stream, user_remote, sshfs_p
 def main():
     global shutdown_requested, ssh_process
 
-    if len(sys.argv) < 5:
-        logger.error(
-            "Usage: lsp-proxy.py <user@remote> <sshfs_prefix> <remote_prefix> [--root-dir <dir>] <lsp_command> [args...]"
-        )
-        sys.exit(1)
+    user_remote, sshfs_prefix, remote_prefix, root_dir, lsp_command = parse_args(sys.argv)
 
-    user_remote = sys.argv[1]
-    sshfs_prefix = sys.argv[2]
-    remote_prefix = sys.argv[3]
+    ssh_cmd = build_ssh_command(user_remote, root_dir, lsp_command)
 
-    # Parse --root-dir option
-    root_dir = None
-    lsp_command_start = 4
-    if len(sys.argv) > 5 and sys.argv[4] == "--root-dir":
-        root_dir = sys.argv[5]
-        lsp_command_start = 6
-        logger.info(f"Root directory specified: {root_dir}")
-
-    lsp_command = sys.argv[lsp_command_start:]
-
-    logger.info(f"Starting proxy for {user_remote} with command: {' '.join(lsp_command)}")
-
-    # Start SSH process
     try:
-        lsp_command_str = " ".join(lsp_command)
-
-        # Add working directory change if root_dir is specified
-        import shlex
-
-        cd_command = f"cd {shlex.quote(root_dir)} && " if root_dir else ""
-
-        # Comprehensive environment setup that covers most common installation paths
-        env_setup = (
-            "source ~/.bashrc 2>/dev/null || true; "
-            "source ~/.profile 2>/dev/null || true; "
-            "source ~/.zshrc 2>/dev/null || true; "  # Some users use zsh
-            "export PATH=$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:$PATH; "
-            "export CARGO_HOME=$HOME/.cargo 2>/dev/null || true; "  # Ensure Cargo env is set
-            "export RUSTUP_HOME=$HOME/.rustup 2>/dev/null || true; "  # Ensure Rustup env is set
-        )
-
-        full_command = f"{env_setup} {cd_command}{lsp_command_str}"
-        ssh_cmd = [
-            "ssh",
-            "-q",
-            "-o",
-            "ServerAliveInterval=10",
-            "-o",
-            "ServerAliveCountMax=6",
-            "-o",
-            "TCPKeepAlive=yes",
-            "-o",
-            "ControlMaster=no",
-            "-o",
-            "ControlPath=none",
-            user_remote,
-            full_command,
-        ]
-        logger.info(f"Using environment setup for LSP server: {cd_command}{lsp_command_str}")
-
-        logger.info(f"Executing: {' '.join(ssh_cmd)}")
-
         ssh_process = subprocess.Popen(
             ssh_cmd,
             stdin=subprocess.PIPE,
@@ -262,42 +299,19 @@ def main():
             stderr=subprocess.PIPE,
             bufsize=0,
         )
-
         logger.info(f"SSH process started with PID: {ssh_process.pid}")
-
-        # Start stderr monitoring thread to catch any LSP server errors
-        def monitor_stderr():
-            while not shutdown_requested:
-                try:
-                    line = ssh_process.stderr.readline()
-                    if not line:
-                        break
-                    error_msg = line.decode("utf-8", errors="replace").strip()
-                    if error_msg:
-                        logger.error(error_msg)
-
-                        import time
-
-                        time.sleep(0.010)  # TODO: Make the logging stderr doesn't combine (but without sleep)
-                except:
-                    break
-
-        stderr_thread = threading.Thread(target=monitor_stderr)
-        stderr_thread.daemon = True
-        stderr_thread.start()
-
     except Exception as e:
-        logger.error(f"Failed to start SSH process: {e}")
+        logger.error(f"[lsp-proxy.py Error]: Failed to start SSH process: {e}")
         sys.exit(1)
 
-    # Start I/O threads
+    start_stderr_monitoring(ssh_process)
+
     t1 = threading.Thread(
         target=handle_stream,
         args=(
             "neovim_to_ssh",
             sys.stdin.buffer,
             ssh_process.stdin,
-            user_remote,
             sshfs_prefix,
             remote_prefix,
         ),
@@ -308,12 +322,10 @@ def main():
             "ssh_to_neovim",
             ssh_process.stdout,
             sys.stdout.buffer,
-            user_remote,
             sshfs_prefix,
             remote_prefix,
         ),
     )
-
     t1.start()
     t2.start()
 
