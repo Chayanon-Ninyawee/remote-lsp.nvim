@@ -65,17 +65,12 @@ def replace_paths(obj, user_remote, sshfs_prefix, remote_prefix):
             for k, v in obj.items()
         }
     elif isinstance(obj, list):
-        return [
-            replace_paths(item, user_remote, sshfs_prefix, remote_prefix)
-            for item in obj
-        ]
+        return [replace_paths(item, user_remote, sshfs_prefix, remote_prefix) for item in obj]
 
     return obj
 
 
-def handle_stream(
-    stream_name, input_stream, output_stream, user_remote, sshfs_prefix, remote_prefix
-):
+def handle_stream(stream_name, input_stream, output_stream, user_remote, sshfs_prefix, remote_prefix):
     global shutdown_requested, ssh_process
 
     logger.info(f"Starting {stream_name} handler")
@@ -124,9 +119,7 @@ def handle_stream(
                         content_length = int(line.split(b":")[1].strip())
                         break
                     except (ValueError, IndexError) as e:
-                        logger.error(
-                            f"{stream_name} - Failed to parse Content-Length: {e}"
-                        )
+                        logger.error(f"{stream_name} - Failed to parse Content-Length: {e}")
 
             if content_length is None:
                 continue
@@ -140,9 +133,7 @@ def handle_stream(
                     if not chunk:
                         # Similar EOF checking as above
                         if hasattr(input_stream, "closed") and input_stream.closed:
-                            logger.info(
-                                f"{stream_name} - Input stream closed during content read"
-                            )
+                            logger.info(f"{stream_name} - Input stream closed during content read")
                             return
                         if stream_name == "ssh_to_neovim" and ssh_process is not None:
                             if ssh_process.poll() is not None:
@@ -167,9 +158,7 @@ def handle_stream(
                 content_str = content.decode("utf-8")
                 message = json.loads(content_str)
 
-                logger.debug(
-                    f"{stream_name} - Original message: {json.dumps(message, indent=2)}"
-                )
+                logger.debug(f"{stream_name} - Original message: {json.dumps(message, indent=2)}")
 
                 # Check for exit messages
                 if message.get("method") == "exit":
@@ -177,13 +166,9 @@ def handle_stream(
                     shutdown_requested = True
 
                 # Replace URIs
-                translated_message = replace_paths(
-                    message, user_remote, sshfs_prefix, remote_prefix
-                )
+                translated_message = replace_paths(message, user_remote, sshfs_prefix, remote_prefix)
 
-                logger.debug(
-                    f"{stream_name} - Translated message: {json.dumps(translated_message, indent=2)}"
-                )
+                logger.debug(f"{stream_name} - Translated message: {json.dumps(translated_message, indent=2)}")
 
                 # Send translated message
                 new_content = json.dumps(translated_message)
@@ -228,9 +213,7 @@ def main():
 
     lsp_command = sys.argv[lsp_command_start:]
 
-    logger.info(
-        f"Starting proxy for {user_remote} with command: {' '.join(lsp_command)}"
-    )
+    logger.info(f"Starting proxy for {user_remote} with command: {' '.join(lsp_command)}")
 
     # Start SSH process
     try:
@@ -268,9 +251,7 @@ def main():
             user_remote,
             full_command,
         ]
-        logger.info(
-            f"Using environment setup for LSP server: {cd_command}{lsp_command_str}"
-        )
+        logger.info(f"Using environment setup for LSP server: {cd_command}{lsp_command_str}")
 
         logger.info(f"Executing: {' '.join(ssh_cmd)}")
 
@@ -297,9 +278,7 @@ def main():
 
                         import time
 
-                        time.sleep(
-                            0.010
-                        )  # TODO: Make the logging stderr doesn't combine (but without sleep)
+                        time.sleep(0.010)  # TODO: Make the logging stderr doesn't combine (but without sleep)
                 except:
                     break
 
