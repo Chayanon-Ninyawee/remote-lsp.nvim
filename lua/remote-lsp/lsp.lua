@@ -10,11 +10,23 @@ end
 local function setup_lsp_with_remote(lsp, root_dir)
 	local remote_sshfs_root = require("remote-sshfs").config.mounts.base_dir
 
+	local config = vim.fn.deepcopy(vim.lsp.config[lsp])
+
 	vim.lsp.config(lsp, {
 		root_dir = function(bufnr, on_dir)
 			local fullpath = vim.fn.fnamemodify(vim.fn.bufname(bufnr), ":p")
 			if not (remote_sshfs_root and fullpath:sub(1, #remote_sshfs_root) == remote_sshfs_root) then
-				on_dir(root_dir(bufnr))
+				if config.root_dir then
+					config.root_dir(bufnr, on_dir)
+					return
+				end
+
+				if config.root_markers then
+					vim.validate("root_markers", config.root_markers, "table")
+
+					on_dir(vim.fs.root(bufnr, config.root_markers))
+					return
+				end
 			end
 		end,
 	})
@@ -25,7 +37,17 @@ local function setup_lsp_with_remote(lsp, root_dir)
 		root_dir = function(bufnr, on_dir)
 			local fullpath = vim.fn.fnamemodify(vim.fn.bufname(bufnr), ":p")
 			if remote_sshfs_root and fullpath:sub(1, #remote_sshfs_root) == remote_sshfs_root then
-				on_dir(root_dir(bufnr))
+				if config.root_dir then
+					config.root_dir(bufnr, on_dir)
+					return
+				end
+
+				if config.root_markers then
+					vim.validate("root_markers", config.root_markers, "table")
+
+					on_dir(vim.fs.root(bufnr, config.root_markers))
+					return
+				end
 			end
 		end,
 	})

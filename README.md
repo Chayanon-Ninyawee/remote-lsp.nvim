@@ -107,6 +107,24 @@ require("remote-lsp").setup({
 })
 ```
 
+---
+
+You can config the LSP servers in your `nvim-lspconfig` setup like this:
+
+```lua
+vim.lsp.config("clangd", {
+    -- You can set root_dir or root_markers here and it will still work with remote-lsp.nvim plugin
+})
+```
+
+and it will just clone your LSP config to be use in the remote version of the LSP.
+
+or just enable it and use default config:
+
+```lua
+vim.lsp.enable("clangd")
+```
+
 Usage
 -----
 
