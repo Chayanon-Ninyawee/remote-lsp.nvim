@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.2](https://github.com/Chayanon-Ninyawee/remote-lsp.nvim/compare/v1.0.1...v1.0.2) (2025-08-10)
+
+
+### Bug Fixes
+
+* Make root_dir and root_marker config from lspconfig work ([84c819d](https://github.com/Chayanon-Ninyawee/remote-lsp.nvim/commit/84c819de02590cb5cca04066aa1621d26570f308))
+
+
+### Documentation
+
+* Add lspconfig guide to README.md ([e4a86b5](https://github.com/Chayanon-Ninyawee/remote-lsp.nvim/commit/e4a86b5e3ba8ee738b07a9bc03ccbd05f91e4d90))
+
 ## [1.0.1](https://github.com/Chayanon-Ninyawee/remote-lsp.nvim/compare/v1.0.0...v1.0.1) (2025-08-10)
 
 
