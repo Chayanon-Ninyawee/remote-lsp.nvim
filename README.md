@@ -16,7 +16,7 @@ This plugin runs LSP servers on your remote machine via SSH, forwarding the LSP 
 
 ## Requirements
 
-- Neovim 0.7.0+  
+- Neovim 0.11.0+  
 - [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig)  
 - [remote-sshfs.nvim](https://github.com/nosduco/remote-sshfs.nvim)  
 - Python 3 on the local machine (default: `python3`)  
