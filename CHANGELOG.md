@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.3](https://github.com/Chayanon-Ninyawee/remote-lsp.nvim/compare/v1.0.2...v1.0.3) (2025-08-13)
+
+
+### Bug Fixes
+
+* Change env_setup so that it source non-interactive env ([434df64](https://github.com/Chayanon-Ninyawee/remote-lsp.nvim/commit/434df64f3cde59a3fc2c783fdae6b6fe6ef8ed10))
+
+
+### Documentation
+
+* Add important note about non-interactive env ([fbc0c9d](https://github.com/Chayanon-Ninyawee/remote-lsp.nvim/commit/fbc0c9db4c8847bfbbc6b94b700f12570611c52c))
+
 ## [1.0.2](https://github.com/Chayanon-Ninyawee/remote-lsp.nvim/compare/v1.0.1...v1.0.2) (2025-08-10)
 
 
