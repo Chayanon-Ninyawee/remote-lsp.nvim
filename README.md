@@ -134,6 +134,22 @@ Usage
 
 3.	The plugin will disable the local LSP client and instead enable the configured remote LSP servers, communicating over SSH through the Python proxy that handles path translation.
 
+**Important Note:**  
+Many tools and installers (like Homebrew) suggest adding environment setup commands, such as:
+
+```bash
+eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+```
+
+to your shell config files like `~/.bashrc` or `~/.zshrc`.
+
+However, these files are usually only loaded in **interactive shells**, and are **not sourced automatically in non-interactive or remote SSH commands** (which this plugin relies on).
+
+To ensure your environment variables and PATH are correctly set in **both interactive and non-interactive shells**, consider placing such commands in your shell’s **login configuration files** instead, for example:
+
+-	`~/.bash_profile` or `~/.profile` for **bash**  
+-	`~/.zprofile` for **zsh**  
+
 Credits
 -------
 
