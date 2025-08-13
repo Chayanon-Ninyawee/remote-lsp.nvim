@@ -67,12 +67,15 @@ def build_ssh_command(user_remote, root_dir, lsp_command):
         sys.exit(1)
 
     env_setup = (
-        "source ~/.bashrc 2>/dev/null || true; "
-        "source ~/.profile 2>/dev/null || true; "
-        "source ~/.zshrc 2>/dev/null || true; "
-        "export PATH=$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:$PATH; "
-        "export CARGO_HOME=$HOME/.cargo 2>/dev/null || true; "
-        "export RUSTUP_HOME=$HOME/.rustup 2>/dev/null || true; "
+        # Source login shell env files if they exist
+        "[ -f ~/.profile ] && source ~/.profile; "
+        "[ -f ~/.bash_profile ] && source ~/.bash_profile; "
+        "[ -f ~/.zprofile ] && source ~/.zprofile; "
+        # Fallback to interactive shell configs if login ones not present
+        # but it probably won't work since .bashrc and .zshrc return if
+        # it detect that the shell is non-interactive
+        "[ -f ~/.bashrc ] && source ~/.bashrc; "
+        "[ -f ~/.zshrc ] && source ~/.zshrc; "
     )
 
     lsp_command_str = " ".join(lsp_command)
